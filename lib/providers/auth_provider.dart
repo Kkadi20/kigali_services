@@ -2,7 +2,9 @@ import 'package:flutter/foundation.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import '../services/auth_service.dart';
 import '../models/listing_model.dart';
+import '../models/user_model.dart';
 
+// Manages authentication state and exposes it to the UI via Provider
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
 
@@ -11,20 +13,21 @@ class AuthProvider extends ChangeNotifier {
   bool _isLoading = false;
   String? _errorMessage;
 
-  // ── Getters ────────────────────────────────────────────────────────────────
-  User?      get authUser       => _authUser;
-  UserModel? get userProfile    => _userProfile;
-  bool       get isLoading      => _isLoading;
-  String?    get errorMessage   => _errorMessage;
-  String?    get userEmail      => _authService.currentUser?.email;
-  String?    get userId         => _authUser?.uid;
-  bool       get isLoggedIn     => _authUser != null;
+  // Getters for UI to read current auth state
+  User?      get authUser        => _authUser;
+  UserModel? get userProfile     => _userProfile;
+  bool       get isLoading       => _isLoading;
+  String?    get errorMessage    => _errorMessage;
+  String?    get userEmail       => _authService.currentUser?.email;
+  String?    get userId          => _authUser?.uid;
+  bool       get isLoggedIn      => _authUser != null;
   bool       get isEmailVerified => _authUser?.emailVerified ?? false;
 
   AuthProvider() {
     _listenToAuthChanges();
   }
 
+  // Listens to Firebase Auth stream and rebuilds UI on login/logout
   void _listenToAuthChanges() {
     _authService.authStateChanges.listen((User? user) async {
       _authUser = user;
@@ -37,6 +40,7 @@ class AuthProvider extends ChangeNotifier {
     });
   }
 
+  // Creates a new account and sends verification email
   Future<bool> signUp({
     required String email,
     required String password,
@@ -63,6 +67,7 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  // Signs in and blocks access if email is not yet verified
   Future<bool> signIn({
     required String email,
     required String password,
@@ -89,10 +94,9 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> signOut() async {
-    await _authService.signOut();
-  }
+  Future<void> signOut() async => await _authService.signOut();
 
+  // Resends the verification email to the current user
   Future<void> resendVerificationEmail() async {
     _clearError();
     try {
@@ -103,6 +107,7 @@ class AuthProvider extends ChangeNotifier {
     }
   }
 
+  // Reloads the Firebase user to check if email has been verified
   Future<bool> reloadUser() async {
     await _authService.reloadUser();
     _authUser = _authService.currentUser;

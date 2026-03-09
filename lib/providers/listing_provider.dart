@@ -1,50 +1,28 @@
-// ═══════════════════════════════════════════════════════════════════════════════
-// FILE: lib/providers/listing_provider.dart
-//
-// WHY THIS FILE EXISTS:
-//   Manages all state related to service listings:
-//     - The full list from Firestore (real-time stream)
-//     - The filtered/searched list shown in the UI
-//     - The user's own listings for "My Listings" screen
-//     - Loading and error states for CRUD operations
-//
-// KEY CONCEPT – TWO LISTS:
-//   _allListings     = everything from Firestore (never filtered)
-//   filteredListings = what the UI actually shows (result of search + category)
-//
-//   Why two? Because if you filter _allListings in place, you lose data.
-//   The user searches "café" → only cafés show.
-//   User clears search → you need the original list back.
-//
-// DATA FLOW:
-//   Firestore stream → _allListings → filterListings() → filteredListings → UI
-// ═══════════════════════════════════════════════════════════════════════════════
-
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import '../models/listing_model.dart';
 import '../services/listing_service.dart';
 
+// Manages all listing state — full list, filtered list, my listings, and CRUD operations
 class ListingProvider extends ChangeNotifier {
   final ListingService _listingService = ListingService();
 
-  // ── State variables ────────────────────────────────────────────────────────
-  List<ListingModel> _allListings       = [];
-  List<ListingModel> _myListings        = [];
-  List<ListingModel> _filteredListings  = [];
-  bool   _isLoading     = false;
+  // Two separate lists: all from Firestore, and the filtered result shown in UI
+  List<ListingModel> _allListings      = [];
+  List<ListingModel> _myListings       = [];
+  List<ListingModel> _filteredListings = [];
+  bool    _isLoading       = false;
   String? _errorMessage;
 
-  // Search & filter state
-  String  _searchQuery    = '';
-  String? _selectedCategory;        // null = All categories
+  // Current search and filter state
+  String  _searchQuery     = '';
+  String? _selectedCategory;
 
-  // ── Stream subscriptions ───────────────────────────────────────────────────
-  // WHY: We hold references so we can cancel them when done (avoid memory leaks).
+  // Stream subscriptions — kept so we can cancel them on logout
   StreamSubscription<List<ListingModel>>? _allListingsSub;
   StreamSubscription<List<ListingModel>>? _myListingsSub;
 
-  // ── Public getters ─────────────────────────────────────────────────────────
+  // Getters for UI
   List<ListingModel> get allListings      => _allListings;
   List<ListingModel> get filteredListings => _filteredListings;
   List<ListingModel> get myListings       => _myListings;
@@ -53,26 +31,13 @@ class ListingProvider extends ChangeNotifier {
   String             get searchQuery      => _searchQuery;
   String?            get selectedCategory => _selectedCategory;
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STREAM SETUP
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // ── startListeningToAllListings ───────────────────────────────────────────
-  // WHY: Called once when the Directory screen is first built.
-  //      Subscribes to the Firestore stream so any change in the database
-  //      automatically updates the UI without any manual refresh.
-  //
-  // HOW IT WORKS:
-  //   _listingService.getAllListings() returns Stream<List<ListingModel>>
-  //   .listen() registers a callback that runs every time the stream emits
-  //   Inside the callback: save the new list, re-run the filter, notify UI
+  // Subscribes to all listings stream — called when Directory tab loads
   void startListeningToAllListings() {
-    _allListingsSub?.cancel();  // cancel any previous subscription first
-
+    _allListingsSub?.cancel();
     _allListingsSub = _listingService.getAllListings().listen(
       (listings) {
         _allListings = listings;
-        _applyFilter();          // always re-filter when data changes
+        _applyFilter();
         notifyListeners();
       },
       onError: (error) {
@@ -82,12 +47,9 @@ class ListingProvider extends ChangeNotifier {
     );
   }
 
-  // ── startListeningToMyListings ────────────────────────────────────────────
-  // WHY: Called once when "My Listings" tab is first shown.
-  //      Filters Firestore to only the current user's listings.
+  // Subscribes to the current user's listings — called when My Listings tab loads
   void startListeningToMyListings(String uid) {
     _myListingsSub?.cancel();
-
     _myListingsSub = _listingService.getListingsByUser(uid).listen(
       (listings) {
         _myListings = listings;
@@ -100,68 +62,47 @@ class ListingProvider extends ChangeNotifier {
     );
   }
 
-  // ── stopListening ─────────────────────────────────────────────────────────
-  // WHY: Called when user logs out. Cancelling subscriptions frees memory
-  //      and prevents Firestore billing for unused listeners.
+  // Cancels all streams and clears data on logout
   void stopListening() {
     _allListingsSub?.cancel();
     _myListingsSub?.cancel();
     _allListings = [];
-    _myListings = [];
+    _myListings  = [];
     _filteredListings = [];
     notifyListeners();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // SEARCH & FILTER
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // ── updateSearch ──────────────────────────────────────────────────────────
-  // WHY: Called every time the user types in the search TextField.
-  //      Updates the query and immediately re-filters the list.
+  // Updates search query and re-filters the list
   void updateSearch(String query) {
     _searchQuery = query;
     _applyFilter();
     notifyListeners();
   }
 
-  // ── selectCategory ────────────────────────────────────────────────────────
-  // WHY: Called when a category chip is tapped.
-  //      Passing null means "All categories" (no category filter).
+  // Updates selected category chip and re-filters the list
   void selectCategory(String? category) {
     _selectedCategory = category;
     _applyFilter();
     notifyListeners();
   }
 
-  // ── _applyFilter ──────────────────────────────────────────────────────────
-  // WHY: Private helper that runs the filter logic and stores the result.
-  //      Called whenever _allListings, _searchQuery, or _selectedCategory changes.
+  // Runs filter logic against the full list and stores the result
   void _applyFilter() {
     _filteredListings = _listingService.filterListings(
-      allListings:    _allListings,
-      query:          _searchQuery,
-      category:       _selectedCategory,
+      allListings: _allListings,
+      query:       _searchQuery,
+      category:    _selectedCategory,
     );
   }
 
-  // ── clearFilters ──────────────────────────────────────────────────────────
   void clearFilters() {
-    _searchQuery = '';
+    _searchQuery      = '';
     _selectedCategory = null;
     _applyFilter();
     notifyListeners();
   }
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // CRUD OPERATIONS
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  // ── createListing ─────────────────────────────────────────────────────────
-  // WHY: UI calls this to add a new listing.
-  //      The stream will automatically update _allListings when Firestore confirms.
-  //
-  // Returns true on success so the UI can navigate back or show a success message.
+  // Creates a new listing in Firestore
   Future<bool> createListing(ListingModel listing) async {
     _setLoading(true);
     _clearError();
@@ -176,7 +117,7 @@ class ListingProvider extends ChangeNotifier {
     }
   }
 
-  // ── updateListing ─────────────────────────────────────────────────────────
+  // Updates an existing listing in Firestore
   Future<bool> updateListing(ListingModel listing) async {
     _setLoading(true);
     _clearError();
@@ -191,7 +132,7 @@ class ListingProvider extends ChangeNotifier {
     }
   }
 
-  // ── deleteListing ─────────────────────────────────────────────────────────
+  // Deletes a listing from Firestore by document ID
   Future<bool> deleteListing(String id) async {
     _setLoading(true);
     _clearError();
@@ -206,7 +147,6 @@ class ListingProvider extends ChangeNotifier {
     }
   }
 
-  // ── Private helpers ────────────────────────────────────────────────────────
   void _setLoading(bool value) {
     _isLoading = value;
     notifyListeners();
@@ -214,7 +154,6 @@ class ListingProvider extends ChangeNotifier {
 
   void _clearError() {
     _errorMessage = null;
-    // No notifyListeners here – caller will trigger it soon
   }
 
   void clearError() {
@@ -222,9 +161,7 @@ class ListingProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // ── dispose ───────────────────────────────────────────────────────────────
-  // WHY: Called automatically when the Provider is removed from the widget tree.
-  //      MUST cancel stream subscriptions here, or they keep running + billing you.
+  // Cancels stream subscriptions when provider is removed from widget tree
   @override
   void dispose() {
     _allListingsSub?.cancel();
